@@ -6,77 +6,82 @@
 #include <iomanip>
 #pragma comment(lib, "Ws2_32.lib")
 
-#define PORT 12345
+#define POORTNUMMER 12345
 
-std::string clean_filename(const char* fname, int len) {
-    int realLen = 0;
-    while (realLen < len && fname[realLen] != '\0') realLen++;
-    return std::string(fname, realLen);
+// Functie: haalt echte bestandsnaam uit char-array
+std::string bestandsnaam_opschonen(const char* naam, int lengte) {
+    int echteLengte = 0;
+    while (echteLengte < lengte && naam[echteLengte] != '\0') echteLengte++;
+    return std::string(naam, echteLengte);
 }
 
 int main() {
     WSADATA wsaData;
     WSAStartup(MAKEWORD(2, 2), &wsaData);
 
-    SOCKET server_fd;
-    struct sockaddr_in address;
-    int addrlen = sizeof(address);
+    SOCKET luisterSocket;
+    struct sockaddr_in serverAdres;
+    int adresLengte = sizeof(serverAdres);
 
-    server_fd = socket(AF_INET, SOCK_STREAM, 0);
-    address.sin_family = AF_INET;
-    address.sin_addr.s_addr = INADDR_ANY;
-    address.sin_port = htons(PORT);
+    // Socket aanmaken en voorbereiden
+    luisterSocket = socket(AF_INET, SOCK_STREAM, 0);
+    serverAdres.sin_family = AF_INET;
+    serverAdres.sin_addr.s_addr = INADDR_ANY;
+    serverAdres.sin_port = htons(POORTNUMMER);
 
-    bind(server_fd, (struct sockaddr*)&address, sizeof(address));
-    listen(server_fd, SOMAXCONN);
+    bind(luisterSocket, (struct sockaddr*)&serverAdres, sizeof(serverAdres));
+    listen(luisterSocket, SOMAXCONN);
 
-    std::cout << "Server wacht op een verbinding..." << std::endl;
+    std::cout << "Server staat klaar voor verbindingen..." << std::endl;
 
-    while (true) { // Hoofdloop: steeds nieuwe client accepteren
-        SOCKET client_socket = accept(server_fd, (struct sockaddr*)&address, &addrlen);
-        std::cout << "Nieuwe client verbonden!" << std::endl;
-        // Je kunt hier ook per client een extra thread maken indien gewenst
+    while (true) { // Hoofdloop: wacht steeds op een nieuwe client
+        SOCKET clientSocket = accept(luisterSocket, (struct sockaddr*)&serverAdres, &adresLengte);
+        std::cout << "Nieuwe client is verbonden!" << std::endl;
 
-        // Bestanden blijven ontvangen tot verbinding sluit
+        // Blijft bestanden ontvangen tot de client afsluit
         while (true) {
-            char filename[256] = { 0 };
-            int name_len = recv(client_socket, filename, sizeof(filename), 0);
-            if (name_len <= 0) break;
-            std::string fname = clean_filename(filename, name_len);
+            char naam[256] = { 0 };
+            int ontvangenNaam = recv(clientSocket, naam, sizeof(naam), 0);
+            if (ontvangenNaam <= 0) break;
+            std::string echteNaam = bestandsnaam_opschonen(naam, ontvangenNaam);
 
-            uint32_t filesize;
-            int size_recv = recv(client_socket, (char*)&filesize, sizeof(filesize), 0);
-            if (size_recv <= 0) break;
+            uint32_t bestandsgrootte;
+            int ontvangenGrootte = recv(clientSocket, (char*)&bestandsgrootte, sizeof(bestandsgrootte), 0);
+            if (ontvangenGrootte <= 0) break;
 
-            std::ofstream outfile(fname.c_str(), std::ios::binary);
+            std::ofstream uitvoerBestand(echteNaam.c_str(), std::ios::binary);
             char buffer[4096];
-            uint32_t bytes_received = 0;
+            uint32_t totaalOntvangen = 0;
 
-            auto start = std::chrono::high_resolution_clock::now();
+            // Tijd bijhouden vanaf het begin van het ontvangen bestand
+            auto tijdStart = std::chrono::high_resolution_clock::now();
 
-            while (bytes_received < filesize) {
-                int to_read = ((int)sizeof(buffer) < (int)(filesize - bytes_received)) ? (int)sizeof(buffer) : (int)(filesize - bytes_received);
-                int chunk = recv(client_socket, buffer, to_read, 0);
-                if (chunk <= 0) break;
-                outfile.write(buffer, chunk);
-                bytes_received += chunk;
+            while (totaalOntvangen < bestandsgrootte) {
+                int maxTeLezen = ((int)sizeof(buffer) < (int)(bestandsgrootte - totaalOntvangen)) ? (int)sizeof(buffer) : (int)(bestandsgrootte - totaalOntvangen);
+                int ontvangen = recv(clientSocket, buffer, maxTeLezen, 0);
+                if (ontvangen <= 0) break;
+                uitvoerBestand.write(buffer, ontvangen);
+                totaalOntvangen += ontvangen;
             }
-            outfile.close();
+            uitvoerBestand.close();
 
-            auto end = std::chrono::high_resolution_clock::now();
-            std::chrono::duration<double> sec = end - start;
-            double time_ms = sec.count() * 1000.0;
-            double speed_mbps = sec.count() > 0.0001 ? ((double)filesize * 8.0 / 1e6) / sec.count() : 0.0;
+            // Tijd gemeten einde
+            auto tijdStop = std::chrono::high_resolution_clock::now();
+            std::chrono::duration<double> duur = tijdStop - tijdStart;
+            double duurMs = duur.count() * 1000.0;
+            double snelheidMbps = duur.count() > 0.0001 ? ((double)bestandsgrootte * 8.0 / 1e6) / duur.count() : 0.0;
 
-            std::cout << std::left << std::setw(30) << fname
-                << " time = " << std::setw(8) << std::fixed << std::setprecision(2) << time_ms << " ms"
-                << " speed = " << std::setw(8) << std::fixed << std::setprecision(2) << speed_mbps << " Mbps"
+            // Overzichtelijke en nette uitprint van resultaat
+            std::cout << std::left << std::setw(30) << echteNaam
+                << " tijd = " << std::setw(8) << std::fixed << std::setprecision(2) << duurMs << " ms"
+                << " snelheid = " << std::setw(8) << std::fixed << std::setprecision(2) << snelheidMbps << " Mbps"
                 << std::endl;
         }
-        std::cout << "Client is losgekoppeld." << std::endl;
-        closesocket(client_socket);
+        std::cout << "Client heeft de verbinding verbroken." << std::endl;
+        closesocket(clientSocket);
     }
-    closesocket(server_fd);
+
+    closesocket(luisterSocket);
     WSACleanup();
     return 0;
 }
