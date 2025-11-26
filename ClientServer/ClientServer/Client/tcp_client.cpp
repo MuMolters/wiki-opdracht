@@ -3,55 +3,57 @@
 #include <windows.h>
 #include <iostream>
 #include <fstream>
-#include <chrono>
+#include hrono>
 #include <iomanip>
 #pragma comment(lib, "Ws2_32.lib")
 
-#define PORT 12345
+#define POORTNUMMER 12345
 
-void send_file(const std::string& filename, SOCKET sock) {
-    // Bestandsnaam als 256 bytes sturen
-    char fname_msg[256] = { 0 };
-    strncpy_s(fname_msg, sizeof(fname_msg), filename.c_str(), _TRUNCATE);
-    send(sock, fname_msg, sizeof(fname_msg), 0);
-    // Filesize als 4 bytes sturen
-    std::ifstream infile(filename.c_str(), std::ios::binary | std::ios::ate);
-    if (!infile) {
-        std::cerr << "Kan bestand niet openen: " << filename << std::endl;
+// Functie: stuurt een enkel bestand naar de server
+void bestand_verzenden(const std::string& bestandsnaam, SOCKET socket) {
+    // Bestandsnaam als 256 bytes sturen (buffer met nullen)
+    char naam_voor_overdracht[256] = { 0 };
+    strncpy_s(naam_voor_overdracht, sizeof(naam_voor_overdracht), bestandsnaam.c_str(), _TRUNCATE);
+    send(socket, naam_voor_overdracht, sizeof(naam_voor_overdracht), 0);
+
+    // Bepaal grootte van het bestand
+    std::ifstream invoer(bestandsnaam.c_str(), std::ios::binary | std::ios::ate);
+    if (!invoer) {
+        std::cerr << "Kon bestand niet openen: " << bestandsnaam << std::endl;
         return;
     }
-    uint32_t filesize = static_cast<uint32_t>(infile.tellg());
-    infile.seekg(0);
+    uint32_t bestandsgrootte = static_cast<uint32_t>(invoer.tellg());
+    invoer.seekg(0);
 
-    send(sock, (char*)&filesize, sizeof(filesize), 0);
+    // Verstuur de bestandsgrootte (4 bytes)
+    send(socket, (char*)&bestandsgrootte, sizeof(bestandsgrootte), 0);
 
     char buffer[4096];
-    uint32_t bytes_sent = 0;
+    uint32_t totaal_verzonden = 0;
 
-    // TIMER START
-    auto start = std::chrono::high_resolution_clock::now();
+    // Tijdmeting start
+    auto tijd_start = std::chrono::high_resolution_clock::now();
 
-    while (bytes_sent < filesize) {
-        int to_send = ((int)sizeof(buffer) < (int)(filesize - bytes_sent)) ? (int)sizeof(buffer) : (int)(filesize - bytes_sent);
-        infile.read(buffer, to_send);
-        int sent = send(sock, buffer, to_send, 0);
-        bytes_sent += sent;
+    // Versturen in delen zolang er data is
+    while (totaal_verzonden < bestandsgrootte) {
+        int te_verzenden = ((int)sizeof(buffer) < (int)(bestandsgrootte - totaal_verzonden)) ? (int)sizeof(buffer) : (int)(bestandsgrootte - totaal_verzonden);
+        invoer.read(buffer, te_verzenden);
+        int verstuurd = send(socket, buffer, te_verzenden, 0);
+        totaal_verzonden += verstuurd;
     }
 
-    // TIMER STOP
-    auto end = std::chrono::high_resolution_clock::now();
-    infile.close();
+    // Tijdmeting einde
+    auto tijd_einde = std::chrono::high_resolution_clock::now();
+    invoer.close();
 
-    std::chrono::duration<double> sec = end - start;
-    double time_ms = sec.count() * 1000.0;
-    double speed_mbps = 0;
-    if (sec.count() > 0.0001)
-        speed_mbps = ((double)filesize * 8.0 / 1e6) / sec.count(); // bits naar mbps
+    std::chrono::duration<double> duur = tijd_einde - tijd_start;
+    double duur_ms = duur.count() * 1000.0;
+    double snelheid_mbps = (duur.count() > 0.0001) ? ((double)bestandsgrootte * 8.0 / 1e6) / duur.count() : 0;
 
-    // Netjes afdrukken
-    std::cout << std::left << std::setw(30) << filename
-        << " time = " << std::setw(8) << std::fixed << std::setprecision(2) << time_ms << " ms"
-        << " speed = " << std::setw(8) << std::fixed << std::setprecision(2) << speed_mbps << " Mbps"
+    // Resultaat printen
+    std::cout << std::left << std::setw(30) << bestandsnaam
+        << " tijd = " << std::setw(8) << std::fixed << std::setprecision(2) << duur_ms << " ms"
+        << " snelheid = " << std::setw(8) << std::fixed << std::setprecision(2) << snelheid_mbps << " Mbps"
         << std::endl;
 }
 
@@ -59,35 +61,35 @@ int main() {
     WSADATA wsaData;
     WSAStartup(MAKEWORD(2, 2), &wsaData);
 
-    SOCKET sock = socket(AF_INET, SOCK_STREAM, 0);
-    struct sockaddr_in serv_addr;
-    serv_addr.sin_family = AF_INET;
-    serv_addr.sin_port = htons(PORT);
+    // Socket aanmaken en verbinden met server
+    SOCKET socket_client = socket(AF_INET, SOCK_STREAM, 0);
+    struct sockaddr_in adres_server;
+    adres_server.sin_family = AF_INET;
+    adres_server.sin_port = htons(POORTNUMMER);
 
-    inet_pton(AF_INET, "192.168.0.151", &serv_addr.sin_addr); // Server IP hier invullen!
+    inet_pton(AF_INET, "192.168.0.151", &adres_server.sin_addr); // Pas IP naar jouw server aan!
+    connect(socket_client, (struct sockaddr*)&adres_server, sizeof(adres_server));
 
-    connect(sock, (struct sockaddr*)&serv_addr, sizeof(serv_addr));
-
-    // Folder iteratie met Windows API
-    std::string folder_path = "C:/Users/janse/Documents/wiki opdracht";
-    std::string filter = folder_path + "/*";
-    WIN32_FIND_DATAA findFileData;
-    HANDLE hFind = FindFirstFileA(filter.c_str(), &findFileData);
+    // Alle bestanden in gekozen map verzenden
+    std::string map_pad = "C:/Users/janse/Documents/wiki opdracht";
+    std::string wildcard = map_pad + "/*";
+    WIN32_FIND_DATAA vindBestandData;
+    HANDLE hFind = FindFirstFileA(wildcard.c_str(), &vindBestandData);
 
     if (hFind != INVALID_HANDLE_VALUE) {
         do {
-            if (!(findFileData.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) {
-                std::string filepath = folder_path + "/" + findFileData.cFileName;
-                send_file(filepath, sock);
+            if (!(vindBestandData.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) {
+                std::string volledig_pad = map_pad + "/" + vindBestandData.cFileName;
+                bestand_verzenden(volledig_pad, socket_client);
             }
-        } while (FindNextFileA(hFind, &findFileData));
+        } while (FindNextFileA(hFind, &vindBestandData));
         FindClose(hFind);
     }
     else {
-        std::cerr << "Kan folder niet openen!" << std::endl;
+        std::cerr << "Kon map niet openen!" << std::endl;
     }
 
-    closesocket(sock);
+    closesocket(socket_client);
     WSACleanup();
     std::cout << "Alle bestanden verstuurd." << std::endl;
     return 0;
